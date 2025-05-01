@@ -163,7 +163,7 @@ def verify_guest():
             <div class="form-container">
                 <form id="verifyForm">
                     <input type="text" name="guest_code" placeholder="Enter Guest Code" required>
-                    <button type="submit">Verify</button>
+                    <button type="submit">Confirm</button>
                 </form>
                 <div id="result"></div>
             </div>
