@@ -1,7 +1,5 @@
 from flask import Flask, request, render_template_string, jsonify, redirect, url_for
 import sqlite3
-import random
-import string
 
 app = Flask(__name__)
 
@@ -11,15 +9,17 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS guests 
                  (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
+    
+    # Use deterministic guest codes matching guest_list.csv
     sample_guests = [
         (f'{i:03d}', f'G-{chr(65 + (i-1) % 26)}{(i-1) % 10}{chr(65 + ((i-1) // 10) % 26)}', 0)
         for i in range(1, 301)
     ]
+    
     c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
     conn.commit()
     conn.close()
 
-    
 # Root route
 @app.route('/')
 def index():
@@ -63,7 +63,7 @@ def verify_guest():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Wedding Gate Verification</title>
-        <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Great_Vibes&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
         <style>
             body {
                 margin: 0;
