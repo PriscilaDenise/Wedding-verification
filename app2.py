@@ -1,39 +1,24 @@
 from flask import Flask, request, render_template_string, jsonify, redirect, url_for
 import sqlite3
-import os
-import logging
 
 app = Flask(__name__)
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Path to SQLite database on Render's persistent disk
-DATABASE_PATH = os.getenv('RENDER_DISK_PATH', 'guests.db')  # Fallback to local for testing
-
 # Initialize SQLite database
 def init_db():
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS guests 
-                     (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
-        
-        # Use deterministic guest codes matching guest_list.csv
-        sample_guests = [
-            (f'{i:03d}', f'G-{chr(65 + (i-1) % 26)}{(i-1) % 10}{chr(65 + ((i-1) // 10) % 26)}', 0)
-            for i in range(1, 301)
-        ]
-        
-        c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
-        conn.commit()
-        logger.info("Database initialized successfully with 300 guest codes.")
-    except sqlite3.Error as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-    finally:
-        conn.close()
+    conn = sqlite3.connect('guests.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS guests 
+                 (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
+    
+    # Use deterministic guest codes matching guest_list.csv
+    sample_guests = [
+        (f'{i:03d}', f'G-{chr(65 + (i-1) % 26)}{(i-1) % 10}{chr(65 + ((i-1) // 10) % 26)}', 0)
+        for i in range(1, 301)
+    ]
+    
+    c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
+    conn.commit()
+    conn.close()
 
 # Root route
 @app.route('/')
@@ -50,29 +35,25 @@ def catch_all(path):
 def verify_guest():
     if request.method == 'POST':
         guest_code = request.form.get('guest_code')
-        try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            c = conn.cursor()
-            c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
-            guest = c.fetchone()
-            
-            if not guest:
-                conn.close()
-                return jsonify({'status': 'error', 'message': 'Invalid guest code.'})
-            
-            card_number, scanned = guest
-            if scanned == 1:
-                conn.close()
-                return jsonify({'status': 'error', 'message': 'This code has already been used.'})
-            
-            # Mark as scanned
-            c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
-            conn.commit()
+        conn = sqlite3.connect('guests.db')
+        c = conn.cursor()
+        c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
+        guest = c.fetchone()
+        
+        if not guest:
             conn.close()
-            return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'})
-        except sqlite3.Error as e:
-            logger.error(f"Database error during verification: {e}")
-            return jsonify({'status': 'error', 'message': 'Database error. Please try again.'})
+            return jsonify({'status': 'error', 'message': 'Invalid guest code.'})
+        
+        card_number, scanned = guest
+        if scanned == 1:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'This code has already been used.'})
+        
+        # Mark as scanned
+        c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'})
     
     # Enhanced front-end with wedding-themed design
     return render_template_string('''
@@ -89,7 +70,7 @@ def verify_guest():
                 padding: 0;
                 font-family: 'Roboto', sans-serif;
                 background: url('https://images.unsplash.com/photo-1519741497674-611481863552?ixlib=rb-4.0.3&auto=format&fit=crop&w=1350&q=80') no-repeat center center fixed;
-                background-size: cover;
+                background-size: cover rebirth
                 color: #333;
                 display: flex;
                 justify-content: center;
@@ -206,10 +187,5 @@ def verify_guest():
     ''')
 
 if __name__ == '__main__':
-    try:
-        init_db()
-        port = int(os.getenv('PORT', 5001))
-        app.run(host='0.0.0.0', port=port, debug=True)
-    except Exception as e:
-        logger.error(f"Application startup failed: {e}")
-        raise
+    init_db()
+    app.run(debug=True, port=5001)
