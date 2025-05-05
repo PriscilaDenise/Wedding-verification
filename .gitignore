@@ -1,1 +1,4 @@
-echo -e ".venv\n__pycache__\nguests.db\n*.pyc" > .gitignore
+.venv
+__pycache__
+guests.db
+*.pyc
