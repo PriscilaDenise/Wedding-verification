@@ -1,8 +1,7 @@
 from flask import Flask, request, render_template_string, jsonify, redirect, url_for
-import psycopg2
+import sqlite3
 import os
 import logging
-from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -10,27 +9,19 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Database connection
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/wedding')
-def get_db_connection():
-    try:
-        parsed_url = urlparse(DATABASE_URL)
-        conn = psycopg2.connect(
-            dbname=parsed_url.path[1:],
-            user=parsed_url.username,
-            password=parsed_url.password,
-            host=parsed_url.hostname,
-            port=parsed_url.port
-        )
-        return conn
-    except psycopg2.Error as e:
-        logger.error("Failed to connect to database: %s", e)
-        raise
+# Path to SQLite database on Render's persistent disk
+DATABASE_PATH = os.getenv('RENDER_DISK_PATH', 'guests.db')  # Fallback to local for testing
 
-# Initialize PostgreSQL database
+# Initialize SQLite database
 def init_db():
     try:
-        conn = get_db_connection()
+        # Verify database file accessibility
+        db_dir = os.path.dirname(DATABASE_PATH)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+            logger.info("Created database directory: %s", db_dir)
+        
+        conn = sqlite3.connect(DATABASE_PATH)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS guests 
                      (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
@@ -41,14 +32,31 @@ def init_db():
             for i in range(1, 301)
         ]
         
-        c.executemany('INSERT INTO guests (card_number, guest_code, scanned) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING', sample_guests)
+        c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
         conn.commit()
-        logger.info("Database initialized successfully with 300 guest codes")
-    except psycopg2.Error as e:
+        logger.info("Database initialized successfully with 300 guest codes at %s", DATABASE_PATH)
+    except sqlite3.Error as e:
         logger.error("Database initialization failed: %s", e)
+        raise
+    except OSError as e:
+        logger.error("File system error during database initialization: %s", e)
         raise
     finally:
         conn.close()
+
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM guests')
+        count = c.fetchone()[0]
+        conn.close()
+        return jsonify({'status': 'healthy', 'guest_count': count, 'database_path': DATABASE_PATH}), 200
+    except sqlite3.Error as e:
+        logger.error("Health check failed: %s", e)
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 # Root route
 @app.route('/')
@@ -71,9 +79,9 @@ def verify_guest():
                 return jsonify({'status': 'error', 'message': 'Guest code is required.'}), 400
             
             logger.info("Processing guest code: %s", guest_code)
-            conn = get_db_connection()
+            conn = sqlite3.connect(DATABASE_PATH)
             c = conn.cursor()
-            c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = %s', (guest_code,))
+            c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
             guest = c.fetchone()
             
             if not guest:
@@ -88,13 +96,13 @@ def verify_guest():
                 return jsonify({'status': 'error', 'message': 'This code has already been used.'}), 403
             
             # Mark as scanned
-            c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = %s', (guest_code,))
+            c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
             conn.commit()
             conn.close()
             logger.info("Guest code verified successfully: %s, Card Number: %s", guest_code, card_number)
             return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'}), 200
         
-        except psycopg2.Error as e:
+        except sqlite3.Error as e:
             logger.error("Database error during verification: %s", e)
             return jsonify({'status': 'error', 'message': 'Database error. Please try again.'}), 500
         except Exception as e:
