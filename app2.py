@@ -1,24 +1,34 @@
 from flask import Flask, request, render_template_string, jsonify, redirect, url_for
 import sqlite3
+import logging
 
 app = Flask(__name__)
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Initialize SQLite database
 def init_db():
-    conn = sqlite3.connect('guests.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS guests 
-                 (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
-    
-    # Use deterministic guest codes matching guest_list.csv
-    sample_guests = [
-        (f'{i:03d}', f'G-{chr(65 + (i-1) % 26)}{(i-1) % 10}{chr(65 + ((i-1) // 10) % 26)}', 0)
-        for i in range(1, 301)
-    ]
-    
-    c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('guests.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS guests (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
+        
+        # Use deterministic guest codes matching guest_list.csv
+        sample_guests = [
+            (f'{i:03d}', f'G-{chr(65 + (i-1) % 26)}{(i-1) % 10}{chr(65 + ((i-1) // 10) % 26)}', 0)
+            for i in range(1, 301)
+        ]
+        
+        c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
+        conn.commit()
+        logger.info("Database initialized with 300 guest codes.")
+    except sqlite3.Error as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
+    finally:
+        conn.close()
 
 # Root route
 @app.route('/')
@@ -35,25 +45,37 @@ def catch_all(path):
 def verify_guest():
     if request.method == 'POST':
         guest_code = request.form.get('guest_code')
-        conn = sqlite3.connect('guests.db')
-        c = conn.cursor()
-        c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
-        guest = c.fetchone()
+        logger.info(f"Received guest code: {guest_code}")
+        if not guest_code:
+            logger.error("No guest code provided.")
+            return jsonify({'status': 'error', 'message': 'Guest code is required.'})
         
-        if not guest:
+        try:
+            conn = sqlite3.connect('guests.db')
+            c = conn.cursor()
+            c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
+            guest = c.fetchone()
+            
+            if not guest:
+                conn.close()
+                logger.info(f"Invalid guest code: {guest_code}")
+                return jsonify({'status': 'error', 'message': 'Invalid guest code.'})
+            
+            card_number, scanned = guest
+            if scanned == 1:
+                conn.close()
+                logger.info(f"Guest code already used: {guest_code}")
+                return jsonify({'status': 'error', 'message': 'This code has already been used.'})
+            
+            # Mark as scanned
+            c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
+            conn.commit()
             conn.close()
-            return jsonify({'status': 'error', 'message': 'Invalid guest code.'})
-        
-        card_number, scanned = guest
-        if scanned == 1:
-            conn.close()
-            return jsonify({'status': 'error', 'message': 'This code has already been used.'})
-        
-        # Mark as scanned
-        c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
-        conn.commit()
-        conn.close()
-        return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'})
+            logger.info(f"Guest code verified: {guest_code}, Card: {card_number}")
+            return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'})
+        except sqlite3.Error as e:
+            logger.error(f"Database error: {e}")
+            return jsonify({'status': 'error', 'message': 'Database error. Please try again.'})
     
     # Enhanced front-end with wedding-themed design
     return render_template_string('''
@@ -63,14 +85,14 @@ def verify_guest():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Wedding Gate Verification</title>
-        <link href="https://fonts.googleapis.com/css2?family=Great_Vibes&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+        <link href="[invalid url, do not cite] rel="stylesheet">
         <style>
             body {
                 margin: 0;
                 padding: 0;
                 font-family: 'Roboto', sans-serif;
-                background: url('https://images.unsplash.com/photo-1519741497674-611481863552?ixlib=rb-4.0.3&auto=format&fit=crop&w=1350&q=80') no-repeat center center fixed;
-                background-size: cover rebirth
+                background: url('[invalid url, do not cite]) no-repeat center center fixed;
+                background-size: cover;
                 color: #333;
                 display: flex;
                 justify-content: center;
@@ -169,23 +191,42 @@ def verify_guest():
             </div>
         </div>
         <script>
-            document.getElementById('verifyForm').addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                const response = await fetch('/gate', {
-                    method: 'POST',
-                    body: formData
+            console.log("Script loaded");
+            const form = document.getElementById('verifyForm');
+            if (!form) {
+                console.error("Form not found");
+            } else {
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    console.log("Form submitted");
+                    const formData = new FormData(form);
+                    try {
+                        const response = await fetch('/gate', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const result = await response.json();
+                        console.log("Response:", result);
+                        const resultDiv = document.getElementById('result');
+                        resultDiv.style.color = result.status === 'success' ? 'green' : 'red';
+                        resultDiv.textContent = result.message;
+                    } catch (error) {
+                        console.error("Fetch error:", error);
+                        const resultDiv = document.getElementById('result');
+                        resultDiv.style.color = 'red';
+                        resultDiv.textContent = 'Error submitting form. Please try again.';
+                    }
                 });
-                const result = await response.json();
-                const resultDiv = document.getElementById('result');
-                resultDiv.style.color = result.status === 'success' ? 'green' : 'red';
-                resultDiv.textContent = result.message;
-            });
+            }
         </script>
     </body>
     </html>
     ''')
 
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True, port=5001)
+    try:
+        init_db()
+        app.run(debug=True, port=5001)
+    except Exception as e:
+        logger.error(f"Application startup failed: {e}")
+        raise
