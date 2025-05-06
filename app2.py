@@ -1,5 +1,6 @@
 from flask import Flask, request, render_template_string, jsonify, redirect, url_for
 import sqlite3
+import os
 import logging
 
 app = Flask(__name__)
@@ -8,12 +9,16 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Path to SQLite database on Render's persistent disk
+DATABASE_PATH = os.getenv('RENDER_DISK_PATH', 'guests.db')  # Fallback to local for testing
+
 # Initialize SQLite database
 def init_db():
     try:
-        conn = sqlite3.connect('guests.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS guests (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS guests 
+                     (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
         
         # Use deterministic guest codes matching guest_list.csv
         sample_guests = [
@@ -23,7 +28,7 @@ def init_db():
         
         c.executemany('INSERT OR IGNORE INTO guests (card_number, guest_code, scanned) VALUES (?, ?, ?)', sample_guests)
         conn.commit()
-        logger.info("Database initialized with 300 guest codes.")
+        logger.info("Database initialized successfully with 300 guest codes.")
     except sqlite3.Error as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -45,36 +50,28 @@ def catch_all(path):
 def verify_guest():
     if request.method == 'POST':
         guest_code = request.form.get('guest_code')
-        logger.info(f"Received guest code: {guest_code}")
-        if not guest_code:
-            logger.error("No guest code provided.")
-            return jsonify({'status': 'error', 'message': 'Guest code is required.'})
-        
         try:
-            conn = sqlite3.connect('guests.db')
+            conn = sqlite3.connect(DATABASE_PATH)
             c = conn.cursor()
             c.execute('SELECT card_number, scanned FROM guests WHERE guest_code = ?', (guest_code,))
             guest = c.fetchone()
             
             if not guest:
                 conn.close()
-                logger.info(f"Invalid guest code: {guest_code}")
                 return jsonify({'status': 'error', 'message': 'Invalid guest code.'})
             
             card_number, scanned = guest
             if scanned == 1:
                 conn.close()
-                logger.info(f"Guest code already used: {guest_code}")
                 return jsonify({'status': 'error', 'message': 'This code has already been used.'})
             
             # Mark as scanned
             c.execute('UPDATE guests SET scanned = 1 WHERE guest_code = ?', (guest_code,))
             conn.commit()
             conn.close()
-            logger.info(f"Guest code verified: {guest_code}, Card: {card_number}")
             return jsonify({'status': 'success', 'message': f'Welcome! Card Number: {card_number}'})
         except sqlite3.Error as e:
-            logger.error(f"Database error: {e}")
+            logger.error(f"Database error during verification: {e}")
             return jsonify({'status': 'error', 'message': 'Database error. Please try again.'})
     
     # Enhanced front-end with wedding-themed design
@@ -85,13 +82,13 @@ def verify_guest():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Wedding Gate Verification</title>
-        <link href="[invalid url, do not cite] rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Great_Vibes&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
         <style>
             body {
                 margin: 0;
                 padding: 0;
                 font-family: 'Roboto', sans-serif;
-                background: url('[invalid url, do not cite]) no-repeat center center fixed;
+                background: url('https://images.unsplash.com/photo-1519741497674-611481863552?ixlib=rb-4.0.3&auto=format&fit=crop&w=1350&q=80') no-repeat center center fixed;
                 background-size: cover;
                 color: #333;
                 display: flex;
@@ -191,33 +188,18 @@ def verify_guest():
             </div>
         </div>
         <script>
-            console.log("Script loaded");
-            const form = document.getElementById('verifyForm');
-            if (!form) {
-                console.error("Form not found");
-            } else {
-                form.addEventListener('submit', async (e) => {
-                    e.preventDefault();
-                    console.log("Form submitted");
-                    const formData = new FormData(form);
-                    try {
-                        const response = await fetch('/gate', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const result = await response.json();
-                        console.log("Response:", result);
-                        const resultDiv = document.getElementById('result');
-                        resultDiv.style.color = result.status === 'success' ? 'green' : 'red';
-                        resultDiv.textContent = result.message;
-                    } catch (error) {
-                        console.error("Fetch error:", error);
-                        const resultDiv = document.getElementById('result');
-                        resultDiv.style.color = 'red';
-                        resultDiv.textContent = 'Error submitting form. Please try again.';
-                    }
+            document.getElementById('verifyForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const response = await fetch('/gate', {
+                    method: 'POST',
+                    body: formData
                 });
-            }
+                const result = await response.json();
+                const resultDiv = document.getElementById('result');
+                resultDiv.style.color = result.status === 'success' ? 'green' : 'red';
+                resultDiv.textContent = result.message;
+            });
         </script>
     </body>
     </html>
@@ -226,7 +208,8 @@ def verify_guest():
 if __name__ == '__main__':
     try:
         init_db()
-        app.run(debug=True, port=5001)
+        port = int(os.getenv('PORT', 5001))
+        app.run(host='0.0.0.0', port=port, debug=True)
     except Exception as e:
         logger.error(f"Application startup failed: {e}")
         raise
