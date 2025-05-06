@@ -2,3 +2,4 @@
 __pycache__
 guests.db
 *.pyc
+.env
