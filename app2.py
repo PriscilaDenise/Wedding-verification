@@ -24,7 +24,7 @@ def init_db():
         conn = sqlite3.connect(DATABASE_PATH)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS guests 
-                     (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
+                    (card_number TEXT PRIMARY KEY, guest_code TEXT UNIQUE, scanned INTEGER DEFAULT 0)''')
         
         # Use deterministic guest codes matching guest_list.csv
         sample_guests = [
